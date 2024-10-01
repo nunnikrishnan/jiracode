@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jira-deployment
+  namespace: test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jira
+  template:
+    metadata:
+      labels:
+        app: jira
+    spec:
+      containers:
+        - name: jira
+          image: atlassian/jira-software:latest
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: jira-data
+              mountPath: /var/atlassian/application-data/jira
+      volumes:
+        - name: jira-data
+          persistentVolumeClaim:
+            claimName: jira-pvc
+        
