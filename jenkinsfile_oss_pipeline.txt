@@ -1,0 +1,139 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'ORG_NAME', defaultValue: 'abc', description: 'Enter the organization name in lower case')
+    }
+    environment {
+        AWS_ID = credentials('aws-id')
+    }
+
+    stages {
+        
+        stage('Install AWS CLI') {
+            steps {
+                sh '''
+                    apt-get update && apt-get install -y awscli
+                    aws --version
+                '''
+            }
+        }
+           
+        stage ('Install kubectl'){
+           steps {
+                   sh ''' 
+                   if ! command -v kubectl &> /dev/null; then
+                   echo "kubectl not found. Installing ..."
+                   curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                   chmod +x kubectl
+                   mv kubectl /usr/local/bin/
+ 
+                   else
+ 
+                   echo "kubectl is already installed"
+ 
+                   fi 
+                   kubectl version --client
+                   '''
+               }
+           }
+        stage('Configure kubectl') {
+            steps {
+                script {
+                    sh 'aws eks --region us-east-1 update-kubeconfig --name alti-chatbot-dev'
+                    sh 'kubectl config get-contexts'
+                }
+            }
+        }
+        stage('Create Namespaces') {
+            steps {
+                script {
+                    def namespaces = ['bitbucket','jenkins','postgres','jira']
+                    namespaces.each { tool ->
+                        sh "kubectl create namespace ${params.ORG_NAME}-${tool} || echo 'Namespace exists'"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy BitBucket') {
+            steps {
+                configFileProvider(
+                    [
+                        configFile(fileId: 'bitbucket_deployment_id', variable: 'bitbucket_deployment'),
+                        configFile(fileId: 'bitbucket_service_id', variable: 'bitbucket_service'),
+                        configFile(fileId: 'bitbucket_pvc_id', variable: 'bitbucket_pvc')
+                    ]
+                )
+                {
+                    sh "kubectl apply -f ${bitbucket_pvc} -n ${params.ORG_NAME}-bitbucket"
+                    sh "kubectl apply -f ${bitbucket_deployment} -n ${params.ORG_NAME}-bitbucket"
+                    sh "kubectl apply -f ${bitbucket_service} -n ${params.ORG_NAME}-bitbucket"
+                }
+            }
+        }
+       
+        stage('Deploy Jenkins') {
+            steps {
+                configFileProvider(
+                    [
+                        configFile(fileId: 'jenkins_deployment_id', variable: 'jenkins_deployment'),
+                        configFile(fileId: 'jenkins_service_id', variable: 'jenkins_service'),
+                        configFile(fileId: 'jenkins_pvc_id', variable: 'jenkins_pvc')
+                    ]
+                )
+                {
+                    sh "kubectl apply -f ${jenkins_pvc} -n ${params.ORG_NAME}-jenkins"
+                    sh "kubectl apply -f ${jenkins_deployment} -n ${params.ORG_NAME}-jenkins"
+                    sh "kubectl apply -f ${jenkins_service} -n ${params.ORG_NAME}-jenkins"
+                }
+            }
+        }
+
+        stage('Deploy postgresql DB') {
+            steps {
+                configFileProvider(
+                    [
+                        configFile(fileId: 'postgres_deployment', variable: 'postgres_deployment'),
+                        configFile(fileId: 'postgres_service', variable: 'postgres_service'),
+                        configFile(fileId: 'postgres_pvc', variable: 'postgres_pvc'),
+                        configFile(fileId: 'postgres_secrets', variable: 'postgres_secrets')
+                    ]
+                )
+                {
+                    sh "kubectl apply -f ${postgres_secrets} -n ${params.ORG_NAME}-postgres"
+                    sh "kubectl apply -f ${postgres_pvc} -n ${params.ORG_NAME}-postgres"
+                    sh "kubectl apply -f ${postgres_deployment} -n ${params.ORG_NAME}-postgres"
+                    sh "kubectl apply -f ${postgres_service} -n ${params.ORG_NAME}-postgres"
+                }
+            }
+        }
+        stage('Deploy Jira') {
+            steps {
+                configFileProvider(
+                    [
+                        configFile(fileId: 'jira_deployment', variable: 'jira_deployment'),
+                        configFile(fileId: 'jira_service', variable: 'jira_service'),
+                        configFile(fileId: 'jira_pvc', variable: 'jira_pvc'),
+                        configFile(fileId: 'jira_secrets', variable: 'jira_secrets')
+                    ]
+                )
+                {
+                    sh "kubectl apply -f ${jira_secrets} -n ${params.ORG_NAME}-jira"
+                    sh "kubectl apply -f ${jira_pvc} -n ${params.ORG_NAME}-jira"
+                    sh "kubectl apply -f ${jira_deployment} -n ${params.ORG_NAME}-jira"
+                    sh "kubectl apply -f ${jira_service} -n ${params.ORG_NAME}-jira"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment successfull"
+        }
+        failure {
+            echo "Deployment failed. Please check logs."
+        }
+    }
+}
